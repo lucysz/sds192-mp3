@@ -1,0 +1,245 @@
+---
+title: "The (H)Art of Hiking in Macleish"
+subtitle: "Mini Project 3 Write Up"
+author: "Zhu (Lucy) Shen, Jingyi Liu, Sarangoo Chimgee"
+Due date: "April 15, 2018"
+output:
+  html_document:
+    code_folding: hide
+
+---
+
+
+```{r setup, include=FALSE}
+# Open the necesary libraries 
+# will install version 0.3.2
+# install.packages("macleish")
+library(tidyverse)
+library(sf)
+#devtools::install_github("beanumber/macleish")
+library(macleish)
+library(RColorBrewer)
+library(leaflet)
+```
+
+```{r, warning = FALSE, message = FALSE}
+# Define the function that returns the difficulty level of a trail
+hiking_diff <- function(x){
+  if (x<=1){
+    return ("Easy")
+  }
+  if (x> 1 & x<= 10){
+    return ("Moderate")
+  }
+  if (x> 10){
+    return ("Hard")
+  }
+}
+
+
+# Save the campsite data as a tibble 
+campsite <- tribble(
+  ~point, ~lon, ~lat,
+  "Group Campsite", -72.678154, 42.450976, 
+  "Remote campsite", -72.679581, 42.458549
+)
+# Convert the tibble into a sf dataframe
+camp_sf <- campsite %>%
+  st_as_sf(coords = c("lon", "lat"))
+
+# Save the parking data as a tibble 
+parking <- tribble(
+  ~point, ~lon, ~lat,
+  "Parking", -72.680663, 42.448013
+)
+# Convert the tibble into a sf dataframe
+parking_sf <- parking %>%
+  st_as_sf(coords = c("lon", "lat"))
+```
+
+
+### Problem Statement
+
+To classify the trails into "easy", "moderate" and "difficult" depending on their length and change in elevation. 
+
+
+### External Information
+
+The Ada and Archibald MacLeish Field Station is a 240-acre patchwork of forest and farmland located in West Whately, MA. It provides opportunities for faculty and students to conduct environmental research, pursue outdoor education, and enjoy low-impact recreation. MacLeish has nine built trails that are approximately four miles long. This group project will determine the levels of difficulty of the MacLeish trails, classifying them as "easy", "moderate", or "difficult" based on the lengths and changes in elevation. Therefore, visitors can easily choose the trail that is most suitable for them based on their different physical capabilities.
+
+We used the data package "macleish" and the "boundary", "trails", "challenge_courses", "buildings" and "contours_30ft" layers inside "macleish" package to conduct spatial analysis. We created a map of MacLeish with different backgrounds, themes, and layers controllable by button to classify the difficulty of the trails.
+
+In order to evaluate the level of difficulty of the trials, we used the ["Shenandoah's Hiking Difficulty"](https://www.nps.gov/shen/planyourvisit/how-to-determine-hiking-difficulty.htm) formula that determines hiking difficulty. However, based on this formula, all of the trials at MacLeish were considered "very easy". Thus, we kept the difficulty index formula but decided the benchmark for the trails at MacLeish (smaller than 1: "easy"; between 1 and 10: "moderate"; Larger than 10: "hard"). 
+
+#### Trail and Contour Map of Macleish (Including Parking Lots and Challenge Courses)
+###### Note: Colors represent different trails
+
+```{r, warning = FALSE, message = FALSE}
+# Make sure that the layer has the same projection 
+elevation <- macleish_layers[["contours_30ft"]] %>%
+  st_transform(4326) 
+
+# Find all the intersection point of trails and contours 
+trail_intersex <- elevation %>%
+  st_intersection(macleish_layers[["trails"]])
+#head(trail_intersex)
+# Convert the type to be POINT  
+trail_intersex_point <- st_cast(trail_intersex, "POINT")
+
+# Calculate the length of each trail in miles 
+# 1 mile = 1609.34 meters
+trails <- macleish_layers[["trails"]] %>%
+  mutate(length = st_length(geometry)) %>%
+  group_by(name) %>%
+  summarize(total_length_mile = sum(length)/1609.34)
+
+# Next we want to find the change in elevation of these trails in feet 
+macleish_rise <- trail_intersex %>%
+  group_by(name) %>%
+  summarise(elevation_range = max(CONTOUR_FT)-min(CONTOUR_FT), 
+            stand_dev = sd(CONTOUR_FT))
+
+# Define the palette for categorical data 
+factpal <- colorFactor(topo.colors(9), trails$name, 
+                       palette = c('#228B22','#FFFF00','#00FFFF','#FFB90F','#6495ED', '#FF0000','#FF82AB','#836FFF','#FFBBFF'))
+
+# Create the map with different background themes and three layers that are controlled by the button 
+# There is a label showing the name of each trail
+# If you click the intersection point, the height and the trail name will pop up
+map <- 
+  leaflet() %>%
+  addTiles(group = "OSM (default)") %>%
+  addProviderTiles(providers$Thunderforest.Landscape, group = "Landscape") %>%
+  addProviderTiles(providers$Stamen.TonerLite, group = "Toner Lite") %>%
+  addPolylines(data = macleish_layers[["boundary"]], weight = 3, color = "green", fill = "green", group = "Outline") %>%
+  addPolylines(data = elevation, weight = 2, color = "black", group = "Outline") %>%
+  addPolylines(data = trails, weight = 3, color = ~factpal(trails$name), opacity = 1, label = ~name, group = "Trails") %>%
+  addPolygons(data = macleish_layers[["buildings"]], color = "black", stroke = FALSE, label = "Buildings") %>%
+  addCircleMarkers(data = st_cast(trail_intersex, "POINT"), color = "blue",radius = 3, popup = ~paste("Trail: ",name,"<br/>Elevation: ", CONTOUR_FT, "ft"), group = "Intersection Points") %>%
+  addCircleMarkers(data = camp_sf, color = "brown",radius = 3, label = ~point, group = "Campsites") %>%
+  addCircleMarkers(data = parking_sf, color = "red",radius = 3, label = ~point, group = "Parking") %>%
+  addLayersControl(
+    baseGroups = c("OSM (default)", "Landscape", "Toner Lite"),
+    overlayGroups = c("Trails", "Outline", "Intersection Points", "Campsites", "Parking"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+
+# Show the map
+map
+
+```
+
+#### Trail and Contour Map of Macleish (Including Parking Lots, Campsites and Challenge Courses)
+###### Note: Colors represent different trail's difficulty level
+
+```{r, message = FALSE, warning = FALSE}
+# Convert the spatial data sets into normal data frame 
+df_1 <- as.data.frame(macleish_rise) %>%
+  select(name, elevation_range, stand_dev)
+df_2 <- as.data.frame(trails) %>%
+  select(name, total_length_mile)
+
+# use the full join to convert the data type of two columns 
+df <- df_1 %>%
+  full_join(df_2) %>%
+  mutate(total_length_mile = as.numeric(total_length_mile), 
+         elevation_range = as.numeric(elevation_range))
+
+# Because there is some NA in the data set, in order to calculate the difficulty level
+df$elevation_range[which(is.na(df$elevation_range))] <- 1
+df$elevation_range[which(df$elevation_range == 0)] <- 1
+
+# Calculate the difficulty index = sqrt(2*elevation change*total length in mile))
+df <- df %>%
+  mutate(diff_index =sqrt(2*elevation_range*total_length_mile)) %>%
+  arrange(name)
+
+# Apply the function that categorize each trail by their difficulty level
+df$diff_cat <- lapply(df$diff_index, FUN = hiking_diff)
+
+# Join two st data set by trials' names 
+macleish_data <- trails %>%
+  st_join(macleish_rise, join = st_contains, left = TRUE) %>%
+  arrange(name.x)
+
+# Change the macleish_data elevation change, diff_index and diff_cat
+macleish_data <- macleish_data %>%
+  mutate(elevation_range = df$elevation_range, 
+         diff_index = df$diff_index, 
+         diff_cat = df$diff_cat)
+
+# Split the data into three sub-data set of "Easy", "Moderate" and "Hard"
+easy <- macleish_data %>%
+  filter(diff_cat == "Easy")
+moderate <- macleish_data %>%
+  filter(diff_cat == "Moderate")
+hard <- macleish_data %>%
+  filter(diff_cat == "Hard")
+
+# Create the map with different background themes and three layers("Easy", "Moderate" and "Hard") that are controlled by the button 
+# There is a label showing the name of each trail
+# If you click the intersection point, the height and the trail name will pop up
+map_cat <- 
+  leaflet() %>%
+  addTiles(group = "OSM (default)") %>%
+  addProviderTiles(providers$Thunderforest.Landscape, group = "Landscape") %>%
+  addProviderTiles(providers$Stamen.TonerLite, group = "Toner Lite") %>%
+  addPolylines(data = macleish_layers[["boundary"]], weight = 3, color = "green", fill = "green", group = "Outline") %>%
+  addPolylines(data = elevation, weight = 2, color = "black", group = "Outline") %>%
+  addPolylines(data = easy, weight = 3, color = "yellow", opacity = 1, label = ~name.x, group = "Easy") %>%
+  addPolylines(data = moderate, weight = 3, color = "orange", opacity = 1, label = ~name.x, group = "Moderate") %>%
+  addPolylines(data = hard, weight = 3, color = "red", opacity = 1, label = ~name.x, group = "Hard") %>%
+  addCircleMarkers(data = macleish_layers[["challenge_courses"]], color = "green",radius = 3, label = ~paste("Challenge Course: ",cmt), group = "Challenge Course") %>%
+  addPolygons(data = macleish_layers[["buildings"]], color = "black", stroke = FALSE, label = "Buildings") %>%
+  addCircleMarkers(data = st_cast(trail_intersex, "POINT"), color = "blue",radius = 2, popup = ~paste("Trail: ",name,"<br/>Elevation: ", CONTOUR_FT, "ft"), group = "Intersection Points") %>%
+  addCircleMarkers(data = camp_sf, color = "brown",radius = 3, label = ~point, group = "Campsites") %>%
+  addCircleMarkers(data = parking_sf, color = "red",radius = 3, label = ~point, group = "Parking") %>%
+  addLayersControl(
+    baseGroups = c("OSM (default)", "Landscape", "Toner Lite"),
+    overlayGroups = c("Outline", "Intersection Points", "Easy", "Moderate", "Hard", "Challenge Course", "Campsites", "Parking"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) 
+# Show the leaflet map
+
+map_cat
+
+
+```
+
+### Analysis Result
+
+We believe that one of the important improvements needed at the MacLeish Field Station is the accessibility for all visitors including the elderly, disabled and parents with young children. It is important that the MacLeish provides an environment with equal opportunities for all visitors to enjoy the field station. Based on our project, we observed that Easy trails include: Driveway, Easy Out, entry trail and Porcupine Trail; Moderate Trails include: Eastern Loop, Poplar Hill Road and Vernal Pool Loop; Hard Trails include: Snowmobile Trail and Western Loop. We observed that the challenge courses and campsites within the field station are only accessible by the moderate or hard trails that might be difficult for the elderly, disabled and parents with young children to access. They also might consider the trails from the parking lot to the activities to be lengthy.
+
+### Alternative actions that can be taken
+
+In order to make the MacLeish Field Station feasible for all visitors, actions that can be taken are:
+
++ Set more challenge courses near the entry;
+
++ Increase the number of easy trails in road of the current challenge courses;
+
++ Create another parking lot near every campsite;
+
++ Create a campsite near the parking lot;
+
+### Action Recommended
+
+Building a parking lot and a campsite has their own difficulties. For building a parking lot, we have to take into consideration the environmental issues like air and water pollution, and other issues like excessive automobile use, automobile regulations, etc. Similarly, when building a campsite, we also need to consider it's sustainability. 
+
+In order for all visitors to access and enjoy the field station, we recommend that the best action to take is to set more activities such as challenge courses near the entry and to add an "easy" trail that would lead visitors from the entry trail straight to the Group Campsite located in between Snowball and East Loop trails. These actions compared to the others are the most eco-friendly and low cost with no severe environmental impacts.
+
+### Cost and Length of Construction
+
+Based on the [Trailscape INC](http://www.trailscapeinc.com/faq.php), the new "easy" trail would cost at minimum $8,000 per mile depending on the quality of the desired trail and the location of the trail (steepness, amount of bushes, etc). Also, it will take about a week per mile to make the trails.
+
+Based on [Northeast Adventure LLC](https://www.neadventure.com/cost.html), the new challenge courses near the entry could be constructed at minimum $11,000. It would also take more or less than a week to finish the construction.
+
+
+
+### Evaluation
+
+We believe that the only major roadblock would be the current financial state of Smith College with the new Nielson library and tight budgeting of college resources. We may not improve the accessibility of MacLeish in the next 3-4 years. However, if MacLeish has their own allocated funding and really do want to increase the number of visitors and it's accessibility, adding in the new "easy" trails and activities near the entry would really make a difference. Thus, at the end of the day, it comes down to if Macleish value and prioritize the benefits more than the costs.
+
+
+Here is a footnote for [Github](https://github.com/lucysz/sds192-mp3)
